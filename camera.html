@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Card Scanner</title>
+
+<!-- Scanbot Web SDK -->
+<script src="https://cdn.jsdelivr.net/npm/scanbot-web-sdk@latest/bundle/ScanbotSDK.min.js"></script>
+
+<style>
+  :root {
+    --bg:       #0f1117;
+    --surface:  #1a1d27;
+    --border:   #2d3142;
+    --accent:   #00e59b;
+    --accent2:  #3b82f6;
+    --text:     #e8e8e8;
+    --muted:    #6b7280;
+    --danger:   #ef4444;
+    --warning:  #f59e0b;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  /* ── TOP BAR ── */
+  .top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .top-bar h2 {
+    font-family: 'Space Mono', monospace;
+    font-size: 14px;
+    letter-spacing: 1px;
+    color: var(--accent);
+  }
+  .badge {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    background: var(--border);
+    color: var(--muted);
+    font-family: monospace;
+  }
+  .badge.active { background: #0e3324; color: var(--accent); }
+  .badge.locked { background: #1e1a3a; color: var(--accent2); }
+
+  /* ── CAMERA AREA ── */
+  .camera-wrap {
+    position: relative;
+    width: 100%;
+    background: #000;
+    overflow: hidden;
+    max-height: 380px;
+  }
+
+  #videoEl {
+    width: 100%;
+    height: 380px;
+    object-fit: cover;
+    display: block;
+  }
+
+  #overlayCanvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+
+  /* Guide overlay */
+  .guide-frame {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 82%; height: 55%;
+    border: 2px dashed rgba(255,255,255,0.25);
+    border-radius: 12px;
+    pointer-events: none;
+  }
+  .guide-frame::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, var(--accent) 0%, transparent 40%, transparent 60%, var(--accent2) 100%);
+    opacity: 0.3;
+  }
+
+  /* Corner accents */
+  .corner {
+    position: absolute;
+    width: 18px; height: 18px;
+    border-color: var(--accent);
+    border-style: solid;
+    border-radius: 2px;
+  }
+  .corner.tl { top: -2px; left: -2px; border-width: 3px 0 0 3px; }
+  .corner.tr { top: -2px; right: -2px; border-width: 3px 3px 0 0; }
+  .corner.bl { bottom: -2px; left: -2px; border-width: 0 0 3px 3px; }
+  .corner.br { bottom: -2px; right: -2px; border-width: 0 3px 3px 0; }
+
+  /* Scan line animation */
+  @keyframes scan {
+    0%   { top: 10%; opacity: 1; }
+    90%  { top: 90%; opacity: 1; }
+    100% { top: 10%; opacity: 0; }
+  }
+  .scan-line {
+    position: absolute;
+    left: 10%; right: 10%;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    border-radius: 2px;
+    animation: scan 2.5s ease-in-out infinite;
+    box-shadow: 0 0 8px var(--accent);
+    opacity: 0;
+  }
+  .scan-line.active { opacity: 1; }
+
+  /* Locked overlay */
+  .locked-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-family: monospace;
+    color: var(--accent);
+    letter-spacing: 2px;
+    display: none;
+  }
+  .locked-overlay.show { display: flex; }
+
+  /* ── STATUS BAR ── */
+  .status-bar {
+    padding: 10px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    min-height: 42px;
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+    transition: background 0.3s;
+  }
+  .status-dot.green { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .status-dot.blue  { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+  .status-dot.amber { background: var(--warning); box-shadow: 0 0 6px var(--warning); }
+  #statusText { color: var(--muted); }
+
+  /* ── CONTROLS ── */
+  .controls {
+    display: flex;
+    gap: 10px;
+    padding: 14px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  button {
+    padding: 9px 18px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  button.primary:hover { background: #00c47d; }
+  button.danger { border-color: var(--danger); color: var(--danger); }
+  button.danger:hover { background: #2d0f0f; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ── RESULTS PANEL ── */
+  .results-panel {
+    padding: 16px 20px;
+    flex: 1;
+  }
+  .results-panel h3 {
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+
+  .fields-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  @media (max-width: 500px) { .fields-grid { grid-template-columns: 1fr; } }
+
+  .field {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    transition: border-color 0.3s;
+  }
+  .field.found { border-color: rgba(0, 229, 155, 0.4); }
+  .field-label {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 6px;
+    font-family: monospace;
+  }
+  .field-value {
+    font-size: 16px;
+    font-family: 'Space Mono', monospace;
+    color: var(--text);
+    font-weight: 600;
+    letter-spacing: 1px;
+    min-height: 24px;
+    word-break: break-all;
+  }
+  .field-value.empty {
+    color: var(--border);
+    font-size: 12px;
+    font-style: italic;
+    font-weight: 400;
+    letter-spacing: 0;
+  }
+
+  /* Pulse animation when value found */
+  @keyframes valuePop {
+    0%   { transform: scale(1); }
+    50%  { transform: scale(1.04); }
+    100% { transform: scale(1); }
+  }
+  .field.pop .field-value { animation: valuePop 0.35s ease; }
+
+  /* ── OCR DEBUG ── */
+  #debugBox {
+    margin: 12px 20px;
+    background: #0a0c12;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-family: monospace;
+    font-size: 11px;
+    color: #4ade80;
+    max-height: 120px;
+    overflow-y: auto;
+    display: none;
+  }
+
+  /* ── PERMISSION ERROR ── */
+  #permError {
+    display: none;
+    margin: 20px;
+    padding: 16px;
+    background: #2d0f0f;
+    border: 1px solid var(--danger);
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  #permError a { color: var(--accent2); }
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div class="top-bar">
+  <h2>💳 LIVE CARD SCANNER</h2>
+  <span class="badge" id="stateBadge">IDLE</span>
+</div>
+
+<!-- CAMERA -->
+<div class="camera-wrap" id="cameraWrap">
+  <video id="videoEl" autoplay muted playsinline></video>
+  <canvas id="overlayCanvas"></canvas>
+  <div class="guide-frame">
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+    <div class="scan-line" id="scanLine"></div>
+  </div>
+  <div class="locked-overlay" id="lockedOverlay">🔒 CARD LOCKED</div>
+</div>
+
+<!-- STATUS -->
+<div class="status-bar">
+  <div class="status-dot" id="statusDot"></div>
+  <span id="statusText">Click Start Camera to begin scanning</span>
+</div>
+
+<!-- CONTROLS -->
+<div class="controls">
+  <button class="primary" id="btnStart" onclick="startCamera()">▶ Start Camera</button>
+  <button id="btnStop"  onclick="stopCamera()" disabled>⏹ Stop</button>
+  <button id="btnClear" onclick="clearResults()" disabled>🗑 Clear</button>
+  <button id="btnDebug" onclick="toggleDebug()">🔍 Debug</button>
+  <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-left:auto">
+    <input type="checkbox" id="chkAuto" checked> Auto-lock on detection
+  </label>
+</div>
+
+<!-- RESULTS -->
+<div class="results-panel">
+  <h3>Extracted Card Data</h3>
+  <div class="fields-grid">
+    <div class="field" id="fName">
+      <div class="field-label">👤 Cardholder Name</div>
+      <div class="field-value empty" id="vName">—</div>
+    </div>
+    <div class="field" id="fAccno">
+      <div class="field-label">💳 Card Number</div>
+      <div class="field-value empty" id="vAccno">—</div>
+    </div>
+    <div class="field" id="fBank">
+      <div class="field-label">🏦 Bank / Network</div>
+      <div class="field-value empty" id="vBank">—</div>
+    </div>
+    <div class="field" id="fExpiry">
+      <div class="field-label">📅 Valid Thru</div>
+      <div class="field-value empty" id="vExpiry">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- DEBUG -->
+<div id="debugBox"></div>
+
+<!-- PERMISSION ERROR -->
+<div id="permError">
+  ❌ <strong>Camera access denied.</strong><br>
+  Please allow camera permissions in your browser settings and reload this page.<br>
+  <a href="#" onclick="startCamera()">Try again</a>
+</div>
+
+<script>
+// ────────────────────────────────────────────────────────────
+//  STATE
+// ────────────────────────────────────────────────────────────
+let stream       = null;
+let rafId        = null;
+let isRunning    = false;
+let isLocked     = false;
+let frameCount   = 0;
+const OCR_EVERY  = 20;   // run OCR every N frames
+let scanbotSDK   = null;
+let ocrEngine    = null;
+
+const video      = document.getElementById('videoEl');
+const canvas     = document.getElementById('overlayCanvas');
+const ctx        = canvas.getContext('2d');
+const offscreen  = document.createElement('canvas');
+const offCtx     = offscreen.getContext('2d');
+
+// ────────────────────────────────────────────────────────────
+//  SCANBOT SDK INIT
+// ────────────────────────────────────────────────────────────
+async function initScanbot() {
+  try {
+    scanbotSDK = await ScanbotSDK.initialize({
+      licenseKey: '',  // Empty = trial mode (1 min watermarked, fine for dev)
+      enginePath: 'https://cdn.jsdelivr.net/npm/scanbot-web-sdk@latest/bundle/'
+    });
+    log('Scanbot SDK initialised (trial mode)');
+  } catch (e) {
+    log('Scanbot SDK unavailable — using built-in OCR. ' + e.message);
+    scanbotSDK = null;
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+//  CAMERA
+// ────────────────────────────────────────────────────────────
+async function startCamera() {
+  if (isRunning) return;
+  document.getElementById('permError').style.display = 'none';
+
+  await initScanbot();
+
+  const constraints = {
+    video: {
+      facingMode: { ideal: 'environment' },
+      width:  { ideal: 1280 },
+      height: { ideal: 720 }
+    }
+  };
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    await video.play();
+    isRunning = true;
+    setStatus('green', '📷 Camera active — hold card in the guide frame');
+    setBadge('SCANNING', 'active');
+    document.getElementById('scanLine').classList.add('active');
+    document.getElementById('btnStart').disabled = true;
+    document.getElementById('btnStop').disabled  = false;
+    document.getElementById('btnClear').disabled = false;
+    loop();
+  } catch (err) {
+    console.error(err);
+    document.getElementById('permError').style.display = 'block';
+    setStatus('', '❌ Could not access camera: ' + err.message);
+  }
+}
+
+function stopCamera() {
+  isRunning = false;
+  if (rafId) cancelAnimationFrame(rafId);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  setStatus('', 'Camera stopped');
+  setBadge('IDLE', '');
+  document.getElementById('scanLine').classList.remove('active');
+  document.getElementById('btnStart').disabled = false;
+  document.getElementById('btnStop').disabled  = true;
+}
+
+function clearResults() {
+  isLocked = false;
+  frameCount = 0;
+  document.getElementById('lockedOverlay').classList.remove('show');
+  setBadge('SCANNING', 'active');
+  setStatus('green', '🔄 Cleared — scanning again…');
+  ['Name', 'Accno', 'Bank', 'Expiry'].forEach(k => setField(k, ''));
+  if (isRunning) document.getElementById('scanLine').classList.add('active');
+  log('Results cleared');
+}
+
+// ────────────────────────────────────────────────────────────
+//  RENDER LOOP
+// ────────────────────────────────────────────────────────────
+function loop() {
+  if (!isRunning) return;
+  rafId = requestAnimationFrame(loop);
+
+  if (video.readyState < 2) return;
+
+  // Sync canvas size to video
+  if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+  }
+
+  // OCR on interval, not every frame
+  if (frameCount % OCR_EVERY === 0 && !isLocked) {
+    runOCR();
+  }
+  frameCount++;
+}
+
+// ────────────────────────────────────────────────────────────
+//  OCR  (Scanbot SDK first, fallback to Tesseract.js-lite regex)
+// ────────────────────────────────────────────────────────────
+async function runOCR() {
+  // Capture current frame to offscreen canvas
+  offscreen.width  = video.videoWidth;
+  offscreen.height = video.videoHeight;
+  offCtx.drawImage(video, 0, 0);
+  const imageData = offCtx.getImageData(0, 0, offscreen.width, offscreen.height);
+
+  let text = '';
+
+  // ── APPROACH 1: Scanbot SDK ──────────────────────────────
+  if (scanbotSDK) {
+    try {
+      const blob = await new Promise(res => offscreen.toBlob(res, 'image/jpeg', 0.9));
+      const arrayBuf = await blob.arrayBuffer();
+      const uint8 = new Uint8Array(arrayBuf);
+
+      // Use Scanbot's generic OCR
+      if (scanbotSDK.ocrEngine) {
+        const result = await scanbotSDK.ocrEngine.recognizeText(uint8);
+        text = result.text || '';
+        log('[Scanbot] ' + text.replace(/\n/g, ' | ').substring(0, 120));
+      } else {
+        // Scanbot document detection for cropping
+        const docResult = await scanbotSDK.detectDocument(uint8);
+        if (docResult && docResult.polygon && docResult.polygon.length === 4) {
+          drawPolygon(docResult.polygon, canvas.width, canvas.height);
+        }
+        text = await fallbackOCR();
+      }
+    } catch (e) {
+      log('[Scanbot err] ' + e.message);
+      text = await fallbackOCR();
+    }
+  } else {
+    // ── APPROACH 2: Pure JS extraction from pixel data ───────
+    text = await fallbackOCR();
+  }
+
+  if (text) parseAndDisplay(text);
+}
+
+// ────────────────────────────────────────────────────────────
+//  FALLBACK OCR — loads Tesseract.js on demand
+// ────────────────────────────────────────────────────────────
+let tesseractWorker = null;
+async function fallbackOCR() {
+  try {
+    if (!tesseractWorker) {
+      // Dynamically load Tesseract.js from CDN
+      if (!window.Tesseract) {
+        await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+      }
+      setStatus('amber', '⏳ Loading OCR engine (first time only)…');
+      tesseractWorker = await Tesseract.createWorker('eng', 1, {
+        workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+        corePath:   'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core-simd-lstm.wasm.js',
+        logger: () => {}
+      });
+      await tesseractWorker.setParameters({
+        tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz /.-',
+        tessedit_pageseg_mode: '11'
+      });
+      setStatus('green', '📷 OCR engine ready — scanning…');
+      log('Tesseract worker loaded');
+    }
+
+    // Feed current video frame
+    const { data } = await tesseractWorker.recognize(offscreen);
+    const text = data.text || '';
+    log('[Tesseract] ' + text.replace(/\n/g, ' | ').substring(0, 120));
+    return text;
+  } catch (e) {
+    log('[OCR err] ' + e.message);
+    return '';
+  }
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src; s.async = true;
+    s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+// ────────────────────────────────────────────────────────────
+//  DRAW DOCUMENT POLYGON
+// ────────────────────────────────────────────────────────────
+function drawPolygon(polygon, cw, ch) {
+  ctx.clearRect(0, 0, cw, ch);
+  ctx.beginPath();
+  polygon.forEach((pt, i) => {
+    const x = pt.x * cw, y = pt.y * ch;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.closePath();
+  ctx.strokeStyle = '#00e59b';
+  ctx.lineWidth   = 3;
+  ctx.stroke();
+  ctx.fillStyle   = 'rgba(0,229,155,0.07)';
+  ctx.fill();
+}
+
+// ────────────────────────────────────────────────────────────
+//  PARSE TEXT → CARD FIELDS
+// ────────────────────────────────────────────────────────────
+const KNOWN_BANKS = [
+  'HDFC','ICICI','SBI','AXIS','KOTAK','YES BANK','PNB','CANARA','BOB','UNION',
+  'INDUSIND','IDFC','RBL','FEDERAL','HSBC','CITIBANK','CHASE','BARCLAYS',
+  'WELLS FARGO','BANK OF AMERICA','AMERICAN EXPRESS','AMEX','VISA','MASTERCARD',
+  'RUPAY','DISCOVER','STANDARD CHARTERED','SCB'
+];
+const SKIP_WORDS = new Set([
+  'VALID','THRU','FROM','DEBIT','CREDIT','CARD','BANK','PLATINUM','GOLD','CLASSIC',
+  'SIGNATURE','MEMBER','SINCE','VISA','MASTERCARD','RUPAY','AMEX','DISCOVER',
+  'AUTHORIZED','INTERNATIONAL','WORLDWIDE','NETWORK','SECURE','VERIFIED','EXPIRES',
+  'EXPIRY','DATE','GOOD','ONLY','THROUGH','ACCOUNT','SAVINGS','CURRENT','PREMIER',
+]);
+
+function ocr_clean(t) {
+  return t.replace(/O/g,'0').replace(/o/g,'0')
+          .replace(/I/g,'1').replace(/l/g,'1')
+          .replace(/S/g,'5').replace(/s(?=\d)/g,'5');
+}
+
+function extractCardNumber(text) {
+  const cleaned = ocr_clean(text.replace(/[^\dOoIlSs\s\-]/g,' '));
+  const m = cleaned.match(/\b(\d{4})[\s\-]*(\d{4})[\s\-]*(\d{4})[\s\-]*(\d{4})\b/);
+  if (m) {
+    const d = m.slice(1).join('');
+    return d.replace(/(\d{4})(?=\d)/g,'$1 ').trim();
+  }
+  const digitsOnly = cleaned.replace(/\D/g,'');
+  const nums = digitsOnly.match(/\d{16}/);
+  if (nums) {
+    return nums[0].replace(/(\d{4})(?=\d)/g,'$1 ').trim();
+  }
+  return '';
+}
+
+function extractExpiry(text) {
+  const t = text.replace(/O/g,'0').replace(/o/g,'0').replace(/\s*[\/\-]\s*/g,'/');
+  const matches = [...t.matchAll(/\b(0[1-9]|1[0-2])\s*[\/\-]\s*(\d{2}|\d{4})\b/g)];
+  if (matches.length) {
+    const [, m, y] = matches[matches.length - 1];
+    return `${m}/${y.length === 4 ? y.slice(2) : y}`;
+  }
+  return '';
+}
+
+function extractBank(text) {
+  const upper = text.toUpperCase();
+  for (const bank of KNOWN_BANKS) {
+    if (upper.includes(bank)) return titleCase(bank);
+  }
+  return '';
+}
+
+function extractName(lines) {
+  const candidates = [];
+  for (const line of lines) {
+    const clean = line.replace(/[^A-Za-z\s]/g,'').trim();
+    const words = clean.split(/\s+/).filter(Boolean);
+    if (words.length < 2 || words.length > 4) continue;
+    if (!words.every(w => /^[A-Za-z]+$/.test(w))) continue;
+    if (words.some(w => SKIP_WORDS.has(w.toUpperCase()))) continue;
+    if (words.every(w => w.length <= 2)) continue;
+    candidates.push(words.map(w => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(' '));
+  }
+  return candidates.length ? candidates.reduce((a,b) => a.length >= b.length ? a : b) : '';
+}
+
+function titleCase(s) { return s.split(' ').map(w=>w[0]+w.slice(1).toLowerCase()).join(' '); }
+
+function parseAndDisplay(text) {
+  const lines = text.split('\n').map(l=>l.trim()).filter(Boolean);
+
+  const cardNo = extractCardNumber(text);
+  const expiry = extractExpiry(text);
+  const bank   = extractBank(text);
+  const name   = extractName(lines);
+
+  if (cardNo) setField('Accno', cardNo);
+  if (expiry) setField('Expiry', expiry);
+  if (bank)   setField('Bank', bank);
+  if (name)   setField('Name', name);
+
+  // Auto-lock when card number found
+  if (cardNo && document.getElementById('chkAuto').checked && !isLocked) {
+    isLocked = true;
+    document.getElementById('lockedOverlay').classList.add('show');
+    document.getElementById('scanLine').classList.remove('active');
+    setBadge('LOCKED', 'locked');
+    setStatus('blue', '🔒 Card locked — review the extracted data below');
+  }
+}
+
+// ────────────────────────────────────────────────────────────
+//  UI HELPERS
+// ────────────────────────────────────────────────────────────
+function setField(key, val) {
+  const el  = document.getElementById('v' + key);
+  const box = document.getElementById('f' + key);
+  if (!el) return;
+
+  const hadValue = !el.classList.contains('empty');
+  el.textContent = val || '—';
+
+  if (val) {
+    el.classList.remove('empty');
+    box.classList.add('found');
+    if (!hadValue) { box.classList.remove('pop'); void box.offsetWidth; box.classList.add('pop'); }
+  } else {
+    el.classList.add('empty');
+    box.classList.remove('found', 'pop');
+  }
+}
+
+function setStatus(dotClass, msg) {
+  const dot = document.getElementById('statusDot');
+  dot.className = 'status-dot' + (dotClass ? ' ' + dotClass : '');
+  document.getElementById('statusText').textContent = msg;
+}
+
+function setBadge(label, cls) {
+  const b = document.getElementById('stateBadge');
+  b.textContent = label;
+  b.className = 'badge' + (cls ? ' ' + cls : '');
+}
+
+function log(msg) {
+  const box = document.getElementById('debugBox');
+  const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  box.innerHTML += `<div>[${time}] ${msg}</div>`;
+  box.scrollTop = box.scrollHeight;
+}
+
+function toggleDebug() {
+  const box = document.getElementById('debugBox');
+  box.style.display = box.style.display === 'none' ? 'block' : 'none';
+}
+</script>
+</body>
+</html>
